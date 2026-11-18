@@ -274,8 +274,8 @@ fun RtspStreamFeature(gatewayIp: String?, isPort554Open: Boolean) {
             initialPath = detectedPath,
             onDismiss = { showManualDialog = false },
             onConnect = { finalUrl ->
-showManualDialog = false
-statusMessage = "Подключение к $finalUrl..."
+                showManualDialog = false
+                statusMessage = "Подключение к $finalUrl..."
 activeRtspUrl = finalUrl
 }
 )
@@ -292,8 +292,8 @@ for (chunk in COMMON_RTSP_PATHS.chunked(5)) {
 val jobs = chunk.map { path ->
 async {
 val url = "rtsp://$ip:$port$path"
+val socket = Socket()
 try {
-Socket().use { socket ->
 socket.connect(InetSocketAddress(ip, port), 1200)
 socket.soTimeout = 1200
 val out = PrintWriter(socket.getOutputStream(), true)
@@ -307,9 +307,10 @@ statusLine.contains("200 OK") -> "SUCCESS:$url"
 statusLine.contains("401") -> "AUTH:$path"
 else -> null
 }
-}
-} catch (_: Exception) {
+} catch (: Exception) {
 null
+} finally {
+try { socket.close() } catch (: Exception) { }
 }
 }
 }
@@ -426,18 +427,19 @@ return route.gateway?.hostAddress
 return null
 }
 fun isPortOpen(ip: String, port: Int, timeoutMs: Int): Boolean {
+val socket = Socket()
 return try {
-Socket().use { socket ->
 socket.connect(InetSocketAddress(ip, port), timeoutMs)
 true
-}
 } catch (e: Exception) {
 false
+} finally {
+try { socket.close() } catch (_: Exception) { }
 }
 }
 fun probeRtsp(ip: String, port: Int): String {
+val socket = Socket()
 return try {
-Socket().use { socket ->
 socket.connect(InetSocketAddress(ip, port), 2000)
 socket.soTimeout = 2000
 val out = PrintWriter(socket.getOutputStream(), true)
@@ -456,8 +458,9 @@ if (responseLines.isNotEmpty()) {
 } else {
 "Соединение установлено, но сервер не вернул RTSP-заголовки."
 }
-}
 } catch (e: Exception) {
 "Ошибка при обмене RTSP: ${e.message}"
+} finally {
+try { socket.close() } catch (_: Exception) { }
 }
 }
