@@ -276,191 +276,198 @@ fun RtspStreamFeature(gatewayIp: String?, isPort554Open: Boolean) {
             onConnect = { finalUrl ->
                 showManualDialog = false
                 statusMessage = "Подключение к $finalUrl..."
-activeRtspUrl = finalUrl
+                activeRtspUrl = finalUrl
+            }
+        )
+    }
 }
-)
-}
-}
+
 sealed class StreamCheckResult {
-data class Success(val url: String) : StreamCheckResult()
-data class AuthRequired(val foundPath: String) : StreamCheckResult()
-object NotFound : StreamCheckResult()
+    data class Success(val url: String) : StreamCheckResult()
+    data class AuthRequired(val foundPath: String) : StreamCheckResult()
+    object NotFound : StreamCheckResult()
 }
+
 suspend fun findPublicRtspStream(ip: String, port: Int = 554): StreamCheckResult = withContext(Dispatchers.IO) {
-var authPath: String? = null
-for (chunk in COMMON_RTSP_PATHS.chunked(5)) {
-val jobs = chunk.map { path ->
-async {
-val url = "rtsp://$ip:$port$path"
-val socket = Socket()
-try {
-socket.connect(InetSocketAddress(ip, port), 1200)
-socket.soTimeout = 1200
-val out = PrintWriter(socket.getOutputStream(), true)
-val input = BufferedReader(InputStreamReader(socket.getInputStream()))
-val request = "DESCRIBE $url RTSP/1.0\r\nCSeq: 2\r\nAccept: application/sdp\r\n\r\n"
-out.print(request)
-out.flush()
-val statusLine = input.readLine() ?: ""
-when {
-statusLine.contains("200 OK") -> "SUCCESS:$url"
-statusLine.contains("401") -> "AUTH:$path"
-else -> null
+    var authPath: String? = null
+    for (chunk in COMMON_RTSP_PATHS.chunked(5)) {
+        val jobs = chunk.map { path ->
+            async {
+                val url = "rtsp://$ip:$port$path"
+                val socket = Socket()
+                try {
+                    socket.connect(InetSocketAddress(ip, port), 1200)
+                    socket.soTimeout = 1200
+                    val out = PrintWriter(socket.getOutputStream(), true)
+                    val input = BufferedReader(InputStreamReader(socket.getInputStream()))
+                    val request = "DESCRIBE $url RTSP/1.0\r\nCSeq: 2\r\nAccept: application/sdp\r\n\r\n"
+                    out.print(request)
+                    out.flush()
+                    val statusLine = input.readLine() ?: ""
+                    when {
+                        statusLine.contains("200 OK") -> "SUCCESS:$url"
+                        statusLine.contains("401") -> "AUTH:$path"
+                        else -> null
+                    }
+                } catch (_: Exception) {
+                    null
+                } finally {
+                    try { socket.close() } catch (_: Exception) { }
+                }
+            }
+        }
+        val chunkResults = jobs.awaitAll().filterNotNull()
+        val success = chunkResults.firstOrNull { it.startsWith("SUCCESS:") }
+        if (success != null) {
+            return@withContext StreamCheckResult.Success(success.removePrefix("SUCCESS:"))
+        }
+        val auth = chunkResults.firstOrNull { it.startsWith("AUTH:") }
+        if (auth != null && authPath == null) {
+            authPath = auth.removePrefix("AUTH:")
+        }
+    }
+    if (authPath != null) {
+        StreamCheckResult.AuthRequired(authPath!!)
+    } else {
+        StreamCheckResult.NotFound
+    }
 }
-} catch (: Exception) {
-null
-} finally {
-try { socket.close() } catch (: Exception) { }
-}
-}
-}
-val chunkResults = jobs.awaitAll().filterNotNull()
-val success = chunkResults.firstOrNull { it.startsWith("SUCCESS:") }
-if (success != null) {
-return@withContext StreamCheckResult.Success(success.removePrefix("SUCCESS:"))
-}
-val auth = chunkResults.firstOrNull { it.startsWith("AUTH:") }
-if (auth != null && authPath == null) {
-authPath = auth.removePrefix("AUTH:")
-}
-}
-if (authPath != null) {
-StreamCheckResult.AuthRequired(authPath!!)
-} else {
-StreamCheckResult.NotFound
-}
-}
+
 @Composable
 fun ManualRtspDialog(
-defaultIp: String,
-initialPath: String,
-onDismiss: () -> Unit,
-onConnect: (String) -> Unit
+    defaultIp: String,
+    initialPath: String,
+    onDismiss: () -> Unit,
+    onConnect: (String) -> Unit
 ) {
-var path by remember { mutableStateOf(initialPath) }
-var login by remember { mutableStateOf("") }
-var password by remember { mutableStateOf("") }
-AlertDialog(
-onDismissRequest = onDismiss,
-title = { Text("Параметры RTSP-потока") },
-text = {
-Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-Text("Укажите путь и данные для входа на $defaultIp:554:")
-OutlinedTextField(
-value = path,
-onValueChange = { path = it },
-label = { Text("Путь (например, /live)") },
-singleLine = true
-)
-OutlinedTextField(
-value = login,
-onValueChange = { login = it },
-label = { Text("Логин") },
-singleLine = true
-)
-OutlinedTextField(
-value = password,
-onValueChange = { password = it },
-label = { Text("Пароль") },
-visualTransformation = PasswordVisualTransformation(),
-singleLine = true
-)
+    var path by remember { mutableStateOf(initialPath) }
+    var login by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Параметры RTSP-потока") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Укажите путь и данные для входа на $defaultIp:554:")
+                OutlinedTextField(
+                    value = path,
+                    onValueChange = { path = it },
+                    label = { Text("Путь (например, /live)") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = login,
+                    onValueChange = { login = it },
+                    label = { Text("Логин") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Пароль") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val cleanPath = if (path.startsWith("/")) path else "/$path"
+                val authPart = if (login.isNotBlank()) {
+                    if (password.isNotBlank()) "$login:$password@" else "$login@"
+                } else ""
+                onConnect("rtsp://$authPart$defaultIp:554$cleanPath")
+            }) {
+                Text("Подключить")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
+        }
+    )
 }
-},
-confirmButton = {
-Button(onClick = {
-val cleanPath = if (path.startsWith("/")) path else "/$path"
-val authPart = if (login.isNotBlank()) {
-if (password.isNotBlank()) "$login:$password@" else "$login@"
-} else ""
-onConnect("rtsp://$authPart$defaultIp:554$cleanPath")
-}) {
-Text("Подключить")
-}
-},
-dismissButton = {
-TextButton(onClick = onDismiss) { Text("Отмена") }
-}
-)
-}
+
 @OptIn(UnstableApi::class)
 @Composable
 fun RtspVideoPlayer(rtspUrl: String, onError: (String) -> Unit) {
-val context = LocalContext.current
-val exoPlayer = remember(rtspUrl) {
-ExoPlayer.Builder(context).build().apply {
-val mediaSource = RtspMediaSource.Factory()
-.setForceUseRtpTcp(true)
-.createMediaSource(MediaItem.fromUri(Uri.parse(rtspUrl)))
-setMediaSource(mediaSource)
-addListener(object : Player.Listener {
-override fun onPlayerError(error: PlaybackException) {
-onError(error.message ?: "Не удалось открыть поток")
+    val context = LocalContext.current
+    val exoPlayer = remember(rtspUrl) {
+        ExoPlayer.Builder(context).build().apply {
+            val mediaSource = RtspMediaSource.Factory()
+                .setForceUseRtpTcp(true)
+                .createMediaSource(MediaItem.fromUri(Uri.parse(rtspUrl)))
+            setMediaSource(mediaSource)
+            addListener(object : Player.Listener {
+                override fun onPlayerError(error: PlaybackException) {
+                    onError(error.message ?: "Не удалось открыть поток")
+                }
+            })
+            prepare()
+            playWhenReady = true
+        }
+    }
+    DisposableEffect(exoPlayer) {
+        onDispose { exoPlayer.release() }
+    }
+    AndroidView(
+        factory = { ctx ->
+            PlayerView(ctx).apply {
+                player = exoPlayer
+                useController = true
+            }
+        },
+        modifier = Modifier.fillMaxWidth().height(220.dp)
+    )
 }
-})
-prepare()
-playWhenReady = true
-}
-}
-DisposableEffect(exoPlayer) {
-onDispose { exoPlayer.release() }
-}
-AndroidView(
-factory = { ctx ->
-PlayerView(ctx).apply {
-player = exoPlayer
-useController = true
-}
-},
-modifier = Modifier.fillMaxWidth().height(220.dp)
-)
-}
+
 fun getGatewayIp(context: Context): String? {
-val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-val activeNetwork = cm.activeNetwork ?: return null
-val linkProperties: LinkProperties = cm.getLinkProperties(activeNetwork) ?: return null
-for (route in linkProperties.routes) {
-if (route.isDefaultRoute && route.gateway is Inet4Address) {
-return route.gateway?.hostAddress
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val activeNetwork = cm.activeNetwork ?: return null
+    val linkProperties: LinkProperties = cm.getLinkProperties(activeNetwork) ?: return null
+    for (route in linkProperties.routes) {
+        if (route.isDefaultRoute && route.gateway is Inet4Address) {
+            return route.gateway?.hostAddress
+        }
+    }
+    return null
 }
-}
-return null
-}
+
 fun isPortOpen(ip: String, port: Int, timeoutMs: Int): Boolean {
-val socket = Socket()
-return try {
-socket.connect(InetSocketAddress(ip, port), timeoutMs)
-true
-} catch (e: Exception) {
-false
-} finally {
-try { socket.close() } catch (_: Exception) { }
+    val socket = Socket()
+    return try {
+        socket.connect(InetSocketAddress(ip, port), timeoutMs)
+        true
+    } catch (e: Exception) {
+        false
+    } finally {
+        try { socket.close() } catch (_: Exception) { }
+    }
 }
-}
+
 fun probeRtsp(ip: String, port: Int): String {
-val socket = Socket()
-return try {
-socket.connect(InetSocketAddress(ip, port), 2000)
-socket.soTimeout = 2000
-val out = PrintWriter(socket.getOutputStream(), true)
-val input = BufferedReader(InputStreamReader(socket.getInputStream()))
-val request = "OPTIONS rtsp://$ip:$port/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: AndroidScanner\r\n\r\n"
-out.print(request)
-out.flush()
-val responseLines = mutableListOf()
-var line: String?
-while (input.readLine().also { line = it } != null) {
-if (line.isNullOrEmpty()) break
-responseLines.add(line!!)
-}
-if (responseLines.isNotEmpty()) {
-"Ответ сервера:\n" + responseLines.joinToString("\n")
-} else {
-"Соединение установлено, но сервер не вернул RTSP-заголовки."
-}
-} catch (e: Exception) {
-"Ошибка при обмене RTSP: ${e.message}"
-} finally {
-try { socket.close() } catch (_: Exception) { }
-}
+    val socket = Socket()
+    return try {
+        socket.connect(InetSocketAddress(ip, port), 2000)
+        socket.soTimeout = 2000
+        val out = PrintWriter(socket.getOutputStream(), true)
+        val input = BufferedReader(InputStreamReader(socket.getInputStream()))
+        val request = "OPTIONS rtsp://$ip:$port/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: AndroidScanner\r\n\r\n"
+        out.print(request)
+        out.flush()
+        val responseLines = mutableListOf<String>()
+        var line: String?
+        while (input.readLine().also { line = it } != null) {
+            if (line.isNullOrEmpty()) break
+            responseLines.add(line!!)
+        }
+        if (responseLines.isNotEmpty()) {
+            "Ответ сервера:\n" + responseLines.joinToString("\n")
+        } else {
+            "Соединение установлено, но сервер не вернул RTSP-заголовки."
+        }
+    } catch (e: Exception) {
+        "Ошибка при обмене RTSP: ${e.message}"
+    } finally {
+        try { socket.close() } catch (_: Exception) { }
+    }
 }
